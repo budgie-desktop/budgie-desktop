@@ -73,7 +73,7 @@ namespace Budgie {
 		* Launch the daemon as a child process so that it dies when we die
 		*/
 		private void startup_ibus() {
-			string[] cmdline = {"ibus-daemon", "--xim", "--panel", "disable"};
+			string[] cmdline = {"ibus-daemon", "--xim", "--daemonize"};
 			try {
 				new Subprocess.newv(cmdline, SubprocessFlags.NONE);
 			} catch (Error e) {
