@@ -11,79 +11,50 @@
 
 public class ClockPlugin : Budgie.Plugin, Peas.ExtensionBase {
 	public Budgie.Applet get_panel_widget(string uuid) {
-		return new ClockApplet();
+		return new ClockApplet(uuid);
 	}
 }
 
-enum ClockFormat {
-	TWENTYFOUR = 0,
-	TWELVE = 1;
-}
-
 public const string CALENDAR_MIME = "text/calendar";
+private const string CLOCK_SETTINGS_SCHEMA = "com.solus-project.clock";
+private const string GNOME_SETTINGS_SCHEMA = "org.gnome.desktop.interface";
 
 public class ClockApplet : Budgie.Applet {
 	protected Gtk.EventBox widget;
 	protected Gtk.Box layout;
-	protected Gtk.Label clock;
+	protected Gtk.Label clock_label;
 	protected Gtk.Label date_label;
 	protected Gtk.Label seconds_label;
-
-	protected bool ampm = false;
 
 	private DateTime time;
 
 	protected Settings settings;
+	protected Settings gnome_settings;
 
 	Budgie.Popover? popover = null;
 	AppInfo? calprov = null;
 	Gtk.Button cal_button;
-	Gtk.CheckButton clock_format;
-	Gtk.CheckButton check_seconds;
-	Gtk.CheckButton check_date;
-	ulong check_id;
 
 	Gtk.Orientation orient = Gtk.Orientation.HORIZONTAL;
 
 	private unowned Budgie.PopoverManager? manager = null;
 
-	// Make a fancy button with a direction indicator
-	Gtk.Button new_directional_button(string label_str, Gtk.PositionType arrow_direction) {
-		var box = new Gtk.Box(Gtk.Orientation.HORIZONTAL, 0);
-		box.halign = Gtk.Align.FILL;
-		var label = new Gtk.Label(label_str);
-		var button = new Gtk.Button();
-		var image = new Gtk.Image();
+	private bool clock_show_date;
+	private bool clock_show_seconds;
+	private bool clock_use_24_hour_time;
+	private bool clock_use_custom_format;
+	private string clock_custom_format;
+	private TimeZone clock_timezone;
 
-		if (arrow_direction == Gtk.PositionType.RIGHT) {
-			image.set_from_icon_name("go-next-symbolic", Gtk.IconSize.MENU);
-			box.pack_start(label, true, true, 0);
-			box.pack_end(image, false, false, 1);
-			image.margin_start = 6;
-			label.margin_start = 6;
-		} else {
-			image.set_from_icon_name("go-previous-symbolic", Gtk.IconSize.MENU);
-			box.pack_start(image, false, false, 0);
-			box.pack_start(label, true, true, 0);
-			image.margin_end = 6;
-		}
-
-		label.halign = Gtk.Align.START;
-		label.margin = 0;
-		box.margin = 0;
-		box.border_width = 0;
-		button.get_style_context().add_class(Gtk.STYLE_CLASS_FLAT);
-		button.add(box);
-		return button;
-	}
+	public string uuid { public set; public get; }
 
 	Gtk.Button new_plain_button(string label_str) {
 		Gtk.Button ret = new Gtk.Button.with_label(label_str);
 		ret.get_child().halign = Gtk.Align.START;
 		ret.get_style_context().add_class(Gtk.STYLE_CLASS_FLAT);
-
 		return ret;
 	}
+
 
 	public override void panel_position_changed(Budgie.PanelPosition position) {
 		if (position == Budgie.PanelPosition.LEFT || position == Budgie.PanelPosition.RIGHT) {
@@ -96,15 +67,21 @@ public class ClockApplet : Budgie.Applet {
 		this.update_clock();
 	}
 
-	public ClockApplet() {
+	public ClockApplet(string uuid) {
+		Object(uuid: uuid);
+
+		settings_schema = CLOCK_SETTINGS_SCHEMA;
+		settings_prefix = "/com/solus-project/clock/instance/clock";
+
+		this.settings = this.get_applet_settings(uuid);
+		this.gnome_settings = new Settings(GNOME_SETTINGS_SCHEMA);
+
 		widget = new Gtk.EventBox();
 		layout = new Gtk.Box(Gtk.Orientation.HORIZONTAL, 2);
-
-		clock = new Gtk.Label("");
-		time = new DateTime.now_local();
 		widget.add(layout);
 
-		layout.pack_start(clock, false, false, 0);
+		clock_label = new Gtk.Label("");
+		layout.pack_start(clock_label, false, false, 0);
 		layout.margin = 0;
 		layout.border_width = 0;
 
@@ -119,11 +96,9 @@ public class ClockApplet : Budgie.Applet {
 		date_label.no_show_all = true;
 		date_label.hide();
 
-		clock.valign = Gtk.Align.CENTER;
+		clock_label.valign = Gtk.Align.CENTER;
 		seconds_label.valign = Gtk.Align.CENTER;
 		date_label.valign = Gtk.Align.CENTER;
-
-		settings = new Settings("org.gnome.desktop.interface");
 
 		get_style_context().add_class("budgie-clock-applet");
 
@@ -140,59 +115,15 @@ public class ClockApplet : Budgie.Applet {
 		var menu = new Gtk.Box(Gtk.Orientation.VERTICAL, 1);
 		menu.border_width = 6;
 
-		var time_button = this.new_plain_button(_("Time and date settings"));
+		var time_button = this.new_plain_button(_("System time and date settings"));
 		cal_button = this.new_plain_button(_("Calendar"));
 		time_button.clicked.connect(on_date_activate);
 		cal_button.clicked.connect(on_cal_activate);
 
-		// menu page 1
 		menu.pack_start(time_button, false, false, 0);
 		menu.pack_start(cal_button, false, false, 0);
-		var sub_button = this.new_directional_button(_("Preferences"), Gtk.PositionType.RIGHT);
-		sub_button.clicked.connect(() => { stack.set_visible_child_name("prefs"); });
-		menu.pack_end(sub_button, false, false, 2);
 
-		stack.add_named(menu, "root");
-
-		// page2
-		menu = new Gtk.Box(Gtk.Orientation.VERTICAL, 1);
-		menu.border_width = 6;
-
-		check_date = new Gtk.CheckButton.with_label(_("Show date"));
-		check_date.get_child().set_property("margin-start", 8);
-		settings.bind("clock-show-date", check_date, "active", SettingsBindFlags.GET|SettingsBindFlags.SET);
-		settings.bind("clock-show-date", date_label, "visible", SettingsBindFlags.DEFAULT);
-
-		check_seconds = new Gtk.CheckButton.with_label(_("Show seconds"));
-		check_seconds.get_child().set_property("margin-start", 8);
-
-		settings.bind("clock-show-seconds", check_seconds, "active", SettingsBindFlags.GET|SettingsBindFlags.SET);
-		settings.bind("clock-show-seconds", seconds_label, "visible", SettingsBindFlags.DEFAULT);
-
-		clock_format = new Gtk.CheckButton.with_label(_("Use 24 hour time"));
-		clock_format.get_child().set_property("margin-start", 8);
-
-		check_id = clock_format.toggled.connect_after(() => {
-			ClockFormat f = (ClockFormat)settings.get_enum("clock-format");
-			ClockFormat newf = f == ClockFormat.TWELVE ? ClockFormat.TWENTYFOUR : ClockFormat.TWELVE;
-			this.settings.set_enum("clock-format", newf);
-		});
-
-		// pack page2
-		sub_button = this.new_directional_button(_("Preferences"), Gtk.PositionType.LEFT);
-		sub_button.clicked.connect(() => { stack.set_visible_child_name("root"); });
-		menu.pack_start(sub_button, false, false, 0);
-		menu.pack_start(new Gtk.Separator(Gtk.Orientation.HORIZONTAL), false, false, 2);
-		menu.pack_start(check_date, false, false, 0);
-		menu.pack_start(check_seconds, false, false, 0);
-		menu.pack_start(clock_format, false, false, 0);
-		stack.add_named(menu, "prefs");
-
-
-		// Always open to the root page
-		popover.closed.connect(() => {
-			stack.set_visible_child_name("root");
-		});
+		stack.add(menu);
 
 		widget.button_press_event.connect((e) => {
 			if (e.button != 1) {
@@ -206,9 +137,25 @@ public class ClockApplet : Budgie.Applet {
 			return Gdk.EVENT_STOP;
 		});
 
+		// make sure every setting is ready
+		this.update_setting(CLOCK_SETTINGS_SCHEMA, "show-date");
+		this.update_setting(CLOCK_SETTINGS_SCHEMA, "show-seconds");
+		this.update_setting(GNOME_SETTINGS_SCHEMA, "clock-format"); // clock format comes from gnome desktop settings (24 or 12 hour format)
+		this.update_setting(CLOCK_SETTINGS_SCHEMA, "use-custom-format");
+		this.update_setting(CLOCK_SETTINGS_SCHEMA, "custom-format");
+		this.update_setting(CLOCK_SETTINGS_SCHEMA, "use-custom-timezone");
+		this.update_setting(CLOCK_SETTINGS_SCHEMA, "custom-timezone");
+
 		Timeout.add_seconds_full(Priority.LOW, 1, update_clock);
 
-		settings.changed.connect(on_settings_change);
+		settings.changed.connect((key) => {
+			update_setting(CLOCK_SETTINGS_SCHEMA, key);
+			update_clock();
+		});
+		gnome_settings.changed.connect((key) => {
+			update_setting(GNOME_SETTINGS_SCHEMA, key);
+			update_clock();
+		});
 
 		calprov = AppInfo.get_default_for_type(CALENDAR_MIME, false);
 
@@ -219,10 +166,9 @@ public class ClockApplet : Budgie.Applet {
 		cal_button.clicked.connect(on_cal_activate);
 
 		update_cal();
-
-		update_clock();
+		
 		add(widget);
-		on_settings_change("clock-format");
+
 		popover.get_child().show_all();
 
 		show_all();
@@ -265,20 +211,43 @@ public class ClockApplet : Budgie.Applet {
 		manager.register_popover(widget, popover);
 	}
 
-	protected void on_settings_change(string key) {
-		switch (key) {
-			case "clock-format":
-				SignalHandler.block((void*)this.clock_format, this.check_id);
-				ClockFormat f = (ClockFormat)settings.get_enum(key);
-				ampm = f == ClockFormat.TWELVE;
-				clock_format.set_active(f == ClockFormat.TWENTYFOUR);
-				this.update_clock();
-				SignalHandler.unblock((void*)this.clock_format, this.check_id);
-				break;
-			case "clock-show-seconds":
-			case "clock-show-date":
-				this.update_clock();
-				break;
+	private void update_setting(string schema, string key) {
+		if (schema == CLOCK_SETTINGS_SCHEMA) {
+			switch (key) {
+				case "show-date":
+					this.clock_show_date = settings.get_boolean(key);
+					this.date_label.set_visible(this.clock_show_date);
+					break;
+				case "show-seconds":
+					this.clock_show_seconds = settings.get_boolean(key);
+					this.seconds_label.set_visible(this.clock_show_seconds);
+					break;
+				case "use-custom-format":
+					this.clock_use_custom_format = settings.get_boolean(key);
+					this.date_label.set_visible(!this.clock_use_custom_format);
+					this.seconds_label.set_visible(!this.clock_use_custom_format);
+					break;
+				case "custom-format":
+					this.clock_custom_format = settings.get_string(key);
+					break;
+				case "use-custom-timezone":
+				case "custom-timezone":
+					if (settings.get_boolean("use-custom-timezone")) {
+						this.clock_timezone = new TimeZone(settings.get_string("custom-timezone"));
+					} else {
+						this.clock_timezone = new TimeZone.local();
+					}
+					break;
+			}
+			return;
+		}
+		if (schema == GNOME_SETTINGS_SCHEMA) {
+			switch (key) {
+				case "clock-format": // gnome-settings
+					this.clock_use_24_hour_time = (gnome_settings.get_string("clock-format") == "24h");
+					break;
+			}
+			return;
 		}
 	}
 
@@ -287,7 +256,7 @@ public class ClockApplet : Budgie.Applet {
 	 * Update the date if necessary
 	 */
 	protected void update_date() {
-		if (!check_date.get_active()) {
+		if (!this.clock_show_date || this.clock_use_custom_format) {
 			return;
 		}
 		string ftime;
@@ -298,20 +267,19 @@ public class ClockApplet : Budgie.Applet {
 		}
 
 		// Prevent unnecessary redraws
-		var old = date_label.get_label();
-		var ctime = time.format(ftime);
+		var old = this.date_label.get_label();
+		var ctime = this.time.format(ftime);
 		if (old == ctime) {
 			return;
 		}
-
-		date_label.set_markup(ctime);
+		this.date_label.set_markup(ctime);
 	}
 
 	/**
 	 * Update the seconds if necessary
 	 */
 	protected void update_seconds() {
-		if (!check_seconds.get_active()) {
+		if (!this.clock_show_seconds || this.clock_use_custom_format) {
 			return;
 		}
 		string ftime;
@@ -322,37 +290,34 @@ public class ClockApplet : Budgie.Applet {
 		}
 
 		// Prevent unnecessary redraws
-		var old = date_label.get_label();
-		var ctime = time.format(ftime);
+		var old = this.seconds_label.get_label();
+		var ctime = this.time.format(ftime);
 		if (old == ctime) {
 			return;
 		}
 
-		seconds_label.set_markup(ctime);
+		this.seconds_label.set_markup(ctime);
 	}
 
 	/**
 	 * This is called once every second, updating the time
 	 */
 	protected bool update_clock() {
-		time = new DateTime.now_local();
+		this.time = new DateTime.now(this.clock_timezone);
+		
 		string format;
+		if (!this.clock_use_custom_format) {
+			format = (this.clock_use_24_hour_time) ? "%H:%M" : "%l:%M";
 
-
-		if (ampm) {
-			format = "%l:%M";
-		} else {
-			format = "%H:%M";
-		}
-
-		if (orient == Gtk.Orientation.HORIZONTAL) {
-			if (check_seconds.get_active()) {
+			if (orient == Gtk.Orientation.HORIZONTAL && this.clock_show_seconds) {
 				format += ":%S";
 			}
-		}
 
-		if (ampm) {
-			format += " %p";
+			if (!this.clock_use_24_hour_time) {
+				format += " %p";
+			}
+		} else {
+			format = this.clock_custom_format;
 		}
 
 		string ftime;
@@ -366,17 +331,85 @@ public class ClockApplet : Budgie.Applet {
 		this.update_seconds();
 
 		// Prevent unnecessary redraws
-		var old = clock.get_label();
-		var ctime = time.format(ftime);
+		var old = this.clock_label.get_label();
+		var ctime = this.time.format(ftime);
 		if (old == ctime) {
 			return true;
 		}
 
-		clock.set_markup(ctime);
+		this.clock_label.set_markup(ctime);
 		this.queue_draw();
 
 		return true;
 	}
+
+	public override bool supports_settings() {
+		return true;
+	}
+
+	public override Gtk.Widget? get_settings_ui() {
+		return new ClockSettings(this.get_applet_settings(uuid), new Settings(GNOME_SETTINGS_SCHEMA));
+	}
+}
+
+
+[GtkTemplate (ui="/com/solus-project/clock/settings.ui")]
+public class ClockSettings : Gtk.Grid {
+
+	[GtkChild]
+	private Gtk.Switch? show_date;
+
+	[GtkChild]
+	private Gtk.Switch? show_seconds;
+
+	[GtkChild]
+	private Gtk.Switch? use_24_hour_time;
+
+	[GtkChild]
+	private Gtk.Switch? use_custom_format;
+
+	[GtkChild]
+	private Gtk.Entry? custom_format;
+	
+	[GtkChild]
+	private Gtk.Switch? use_custom_timezone;
+
+	[GtkChild]
+	private Gtk.Entry? custom_timezone;
+
+	public ClockSettings(Settings? settings, Settings? gnome_settings) {
+		settings.bind("show-date", this.show_date, "active", SettingsBindFlags.DEFAULT);
+		settings.bind("show-seconds", this.show_seconds, "active", SettingsBindFlags.DEFAULT);
+		gnome_settings.bind_with_mapping("clock-format", this.use_24_hour_time, "active", SettingsBindFlags.DEFAULT, (value, variant, user_data) => {
+			value.set_boolean((variant.get_string() == "24h"));
+			return true;
+		}, (value, expected_type, user_data) => {
+			if (value.get_boolean()) {
+				return new Variant("s", "24h");
+			}
+			return new Variant("s", "12h");
+		}, null, null);
+		settings.bind("use-custom-format", this.use_custom_format, "active", SettingsBindFlags.DEFAULT);
+		settings.bind("custom-format", this.custom_format, "text", SettingsBindFlags.DEFAULT);
+		settings.bind("use-custom-timezone", this.use_custom_timezone, "active", SettingsBindFlags.DEFAULT);
+		settings.bind("custom-timezone", this.custom_timezone, "text", SettingsBindFlags.DEFAULT);
+
+		this.use_custom_format.notify["active"].connect(this.updateSensitve);
+		this.use_custom_timezone.notify["active"].connect(this.updateSensitve);
+
+		this.updateSensitve();
+	}
+
+	private void updateSensitve() {
+		var useCustomFormat = this.use_custom_format.get_active();
+		this.show_date.set_sensitive(!useCustomFormat);
+		this.show_seconds.set_sensitive(!useCustomFormat);
+		this.use_24_hour_time.set_sensitive(!useCustomFormat);
+		this.custom_format.set_sensitive(useCustomFormat);
+
+		this.custom_timezone.set_sensitive(this.use_custom_timezone.get_active());
+	}
+
 }
 
 [ModuleInit]

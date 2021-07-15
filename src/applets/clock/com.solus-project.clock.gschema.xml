@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="budgie">
+<schema id="com.solus-project.clock">
+    <key type="b" name="show-date">
+      <default>false</default>
+      <summary>Show seconds</summary>
+      <description>Whether to show the date.</description>
+    </key>
+    <key type="b" name="show-seconds">
+      <default>false</default>
+      <summary>Show seconds</summary>
+      <description>Whether to show seconds in the clock.</description>
+    </key>
+    <key type="b" name="use-custom-format">
+      <default>false</default>
+      <summary>Use custom format</summary>
+      <description>Whether to use a custom format for the clock.</description>
+    </key>
+    <key type="s" name="custom-format">
+      <default>"%H:%M:%S %d.%m.%Y"</default>
+      <summary>Format</summary>
+      <description>Format of the clock</description>
+    </key>
+    <key type="b" name="use-custom-timezone">
+      <default>false</default>
+      <summary>Use custom timezone</summary>
+      <description>Whether to use a custom timezone instead of the system one.</description>
+    </key>
+    <key type="s" name="custom-timezone">
+      <default>"UTC"</default>
+      <summary>Timezone</summary>
+      <description>Timezone of the clock, leave empty for system default.</description>
+    </key>
+  </schema>
+</schemalist>
